@@ -1,4 +1,4 @@
-# RealEstate-Data-Insights
+# Real Estate Data Insights and Modelling using R
 This repository contains an R Markdown file, housing dataset and HTML output showcasing a comprehensive analysis of property prices and furnishing status, ideal for real estate insights. The analysis encompasses data cleaning, exploratory data analysis, regression modeling for price prediction, and binary logistic regression for furnishing classification. Originally created as academic coursework for Quantitative Data Analysis, this project analyzes a housing dataset to predict property prices and determine furnishing status. Users can leverage the code and analysis for their own real estate data analytics and modeling.
 
 ## Dataset Information
