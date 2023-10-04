@@ -1,0 +1,1013 @@
+---
+title: "Quantitative Data Analysis"
+author: '2246041'
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+version: 1
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+# 0. Instructions
+
+```{r}
+# Add code here to load any required libraries with `library()`.  
+# We suggest you use `install.package()` for any required packages externally to this document 
+# since installation only need be done once.
+#install.packages("ggplot2")
+#install.packages("ggrepel")
+#install.packages("tidyverse")
+#install.packages("validate")
+#install.packages('caret')
+
+library(ggplot2) # for plotting
+library(ggrepel) # for plot labels in pie chart
+library(tidyverse) # for mutating data 
+library(modeest) # for calculating mode
+library(validate) # for validator object
+library(car) # for QQ plot method and vif
+library(moments) # for skewness test
+library(caret) # for confusion matrix 
+```
+
+# 1. Organise and clean the data
+
+## 1.1 Subset the data into the specific dataset allocated
+
+```{r}
+# Assign your student id into the variable SID, for example:
+SID <- 2246041                  # This is an example, replace 2101234 with your actual ID
+SIDoffset <- (SID %% 100) + 1    # Your SID mod 100 + 1
+
+load("house-analysis.RDa")
+# Now subset the housing data set
+# Pick every 100th observation starting from your offset
+# Put into your data frame named mydf (you can rename it) -> renamed to housedf
+housedf <- house.analysis[seq(from=SIDoffset,to=nrow(house.analysis),by=100),]
+```
+
+## 1.2 Data quality analysis
+
+To check for data quality, we would follow the following steps:
+
+#### Check the data against the provided metadata:
+
+1.  We will check the dimensions (rows and columns) of the data with
+    *dim()*.
+2.  Next, we'll check variable names against metadata with *names()*.
+3.  Additionally, we'll check variable data type with *str()*
+4.  Furthermore, we'll briefly look at the data summary with
+    *summary()*.
+5.  Finally, we'll check number of unique values in the column using
+    *unique()* method. Intuitively, this gives us an idea about the
+    categorical or numerical nature of variables.
+
+#### Eyeball the data
+
+We'll use *head*() or *View*() to get first glance at the data. This
+will also help us understand the variables and set up rules for the
+*validator* object.\
+
+#### Check for completeness of the data
+
+We will count the rows with missing values, NAs, and blanks using
+*is.na*() and *colSums*(). This step is additional as *summary*()
+already shows NA values if any.\
+
+#### Check for Unusual / Implausible Values in individual columns
+
+1.  For variables with numerical values like *mq*, *floor*, *n_rooms*,
+    etc., we'll use conditional operators in the *validator* object to
+    check for negative or 0 values.
+2.  For variables having a fixed set of values, we'll check if their
+    value belong to the listed factors using *validator* object.
+3.  During individual analysis, we'll check for extreme values such as
+    extreme mq or unlikely number of rooms through variable summary and
+    graphical visualizations.
+4.  We'll use the *summary()* and *table()* functions to check for
+    discrepancies in the data by generating a summary for the numerical
+    and frequency table for categorical variables, respectively.
+5.  Graphically, we'll visualize the data and look for any quality
+    issues through the use of *boxplot* and *histogram* for numerical
+    variables, and *barplot* and *piechart* (see [\@r-charts] for adding
+    labels outside chart) for categorical variables.
+
+```{r}
+
+# Custom function for plotting used towards data quality analysis
+
+#Defining functions for plotting via ggplot
+
+#Custom Pie chart using ggplot
+custom_pie <- function(var,  title="", xlab, ylab){
+  if(title==""){
+    title=paste("Pie Chart for",xlab)
+  }
+  
+  df <- as.data.frame(table(var))
+  df2 <- df %>% 
+    mutate(csum = rev(cumsum(rev(Freq))), 
+           pos = Freq/2 + lead(csum, 1),
+           pos = if_else(is.na(pos), Freq/2, pos))
+  ggplot(df, aes(x = "" , y = Freq, fill = var)) + geom_col(width = 1, color=alpha("white",alpha = 0.3)) +
+  coord_polar(theta = "y") +
+  geom_label_repel(data = df2,
+                   aes(y = pos, label = paste0(round(100*Freq/sum(Freq),2), "%")),
+                   size = 3, nudge_x = 1, show.legend = FALSE, color=alpha("#DDDDDD", alpha = 1)) +
+  guides(fill = guide_legend(title = xlab)) + ggtitle(title) +
+  theme_void()
+}
+
+#Custom Bar chart using ggplot
+custom_bar <- function(var, title="", xlab, ylab){
+  if(title==""){
+    title=paste("Bar Graph for",xlab)
+  }
+  df <- as.data.frame(table(var))
+  ggplot(df, aes(x=var, y=Freq, fill=var)) + 
+    geom_bar(width = 1, stat = "identity", color=alpha("white",alpha = 0.3))  + 
+    guides(fill=guide_legend(title=xlab)) + 
+    ggtitle(title) + xlab(xlab) + ylab(ylab)  + 
+    theme_minimal() + 
+    geom_text(aes(x = var, y = Freq + max(Freq)/50, label = Freq), size=3)
+}
+
+#Custom Box Plot using ggplot
+custom_box <- function(var, title="", fill="#bfe9ff", xlab, ylab){
+  if(title==""){
+    title=paste("Box Plot for",xlab)
+  }
+  ggplot(data = housedf, aes(x="",y=var)) + 
+    geom_boxplot(fill=fill) + 
+    ggtitle(title) + xlab(xlab) + ylab(ylab)  + 
+    theme_minimal()  
+}
+
+#Custom Histogram using ggplot
+custom_hist <- function(data, var, title="", fill="#ff6e7f", xlab, ylab, binwidth=1){
+  if(title=="") title=paste("Histogram for",xlab,"vs",ylab)
+  ggplot(data = data, aes(x=var)) + 
+    geom_histogram(binwidth=binwidth, fill=fill,color=alpha("white",alpha = 0.3)) + 
+    ggtitle(title) + xlab(xlab) + ylab(ylab)  + 
+    theme_minimal() + 
+    stat_bin(aes(y=..count.., label=..count..), geom="text", vjust=-.5, binwidth = binwidth, size= 3)
+}
+```
+
+```{r}
+# Checking dimensions of the data
+dim(housedf)
+
+# Getting the variable names
+names(housedf)
+
+# Getting the structure and checking the data type
+str(housedf)
+
+# Displaying the numerical summary of the dataframe
+summary(housedf)
+
+# Eyeballing the data
+#View(housedf)
+head(housedf)
+
+# Get no of Unique values in every column
+# Loop through all columns in the dataset
+for(col in names(housedf)) {
+  # Get the unique values in the column
+  unique_values <- unique(housedf[[col]])
+  # Get no of unique values
+  length_unique <- length(unique_values)
+  
+  # If no of unique values is less, e.g. 20 supposedly
+  if(length_unique < 20) {
+    # Print the length and value of unique values if unique values are limited
+    print(paste(col, "has", length_unique,"unique values; Repeated values are ", toString(unique_values)))
+    }
+  
+  else{
+    # Print the length of unique values in the column if unique values are not limited
+    print(paste(col, "has", length_unique,"unique values;"))
+  }
+}
+
+
+# From metadata, uniqueness check above, and data summary, 
+# we can deduce the following:
+# id: unique, numeric and non-negative
+# price: numeric and non-negative
+# mq: numeric and non-negative
+# floor: categorical, 1 to 7
+# n_rooms: categorical, -1, 2, 3, 4, 5
+# n_bathrooms: categorical, 1, 2, 3
+# has_terrace: binary, either 0 or 1
+# has_alarm: binary, either 0 or 1
+# heating: categorical, (either "autonomous" or "other" from the metadata)
+# has_air_conditioning: binary, either 0 or 1
+# has_parking: binary, either 0 or 1
+# is_furnished: binary, either 0 or 1 
+
+# Data Quality Check using Validator 
+# the rules are built based on outputs from summary() and View()
+house.rules <- validator(uniqId = is_unique(id),
+                         posPrice = price > 0,
+                         posMq = mq > 0,
+                         posFloor = floor > 0,
+                         posRooms = n_rooms > 0,
+                         posBath = n_bathrooms > 0,
+                         okTerc = is.element(has_terrace, c(0,1)),
+                         okAlrm = is.element(has_alarm, c(0,1)),
+                         okHeat = is.element(heating, c("autonomous","other")),
+                         okAC = is.element(has_air_conditioning, c(0,1)),
+                         okPrk = is.element(has_parking, c(0,1)),
+                         okFur = is.element(is_furnished, c(0,1))
+                         )
+housedf.qual.chk <- confront(housedf, house.rules)
+summary(housedf.qual.chk)
+
+# Counting NA values
+colSums(is.na(housedf))
+
+# Analysing id variable via numerical summary and checking if id is unique
+summary(housedf$id)
+nrow(housedf)==sum(housedf$id==unique(housedf$id))
+
+# Numerical Summaries, Boxplot and Histogram for numerical variables
+# Analysing price
+summary(housedf$price)
+custom_box(housedf$price/100000, xlab="price", ylab="in 100k") 
+custom_hist(data=housedf, var=housedf$price/100000, xlab="price (in 100k)", ylab="Frequency")
+
+# Analysing mq
+summary(housedf$mq)
+custom_box(housedf$mq, xlab="mq", ylab="") 
+custom_hist(data = housedf, var = housedf$mq, xlab = "mq", ylab = "sq. meters", binwidth = 100)
+
+# Frequency Distribution Table, Piechart and Barplot for Categorical Variables
+# Analysing floor
+table(housedf$floor)
+custom_pie(var=housedf$floor, title = "Pie Chart for floor distribution", xlab= "floor", ylab ="count")
+custom_bar(var=housedf$floor, xlab= "floor", ylab ="count")
+
+# Analysing n_rooms
+table(housedf$n_rooms)
+custom_pie(var=housedf$n_rooms, title = "Pie Chart for n_rooms distribution", xlab= "n_rooms", ylab ="count")
+custom_bar(var=housedf$n_rooms, xlab= "n_rooms", ylab ="count")
+
+# Analysing n_bathrooms
+table(housedf$n_bathrooms)
+custom_pie(var=housedf$n_bathrooms, title = "Pie Chart for n_bathrooms distribution", xlab= "n_bathrooms", ylab ="count")
+custom_bar(var=housedf$n_bathrooms, xlab= "n_bathrooms", ylab ="count")
+
+# Analysing has_terrace
+table(housedf$has_terrace)
+custom_pie(var=housedf$has_terrace, title = "Pie Chart for has_terrace distribution", xlab= "has_terrace", ylab ="count")
+custom_bar(var=housedf$has_terrace, xlab= "has_terrace", ylab ="count")
+
+# Analysing has_alarm
+table(housedf$has_alarm)
+custom_pie(var=housedf$has_alarm, title = "Pie Chart for has_alarm distribution", xlab= "has_alarm", ylab ="count")
+custom_bar(var=housedf$has_alarm, xlab= "has_alarm", ylab ="count")
+
+# Analysing heating
+table(housedf$heating)
+custom_pie(var=housedf$heating, title = "Pie Chart for heating distribution", xlab= "heating", ylab ="count")
+custom_bar(var=housedf$heating, xlab= "heating", ylab ="count")
+
+# Analysing has_air_conditioning
+table(housedf$has_air_conditioning)
+custom_pie(var=housedf$has_air_conditioning, title = "Pie Chart for has_air_conditioning distribution", xlab= "has_air_conditioning", ylab ="count")
+custom_bar(var=housedf$has_air_conditioning, xlab= "has_air_conditioning", ylab ="count")
+
+# Analysing has_parking
+table(housedf$has_parking)
+custom_pie(var=housedf$has_parking, title = "Pie Chart for has_parking distribution", xlab= "has_parking", ylab ="count")
+custom_bar(var=housedf$has_parking, xlab= "has_parking", ylab ="count")
+
+# Analysing is_furnished
+table(housedf$is_furnished)
+custom_pie(var=housedf$is_furnished, title = "Pie Chart for is_furnished distribution", xlab= "is_furnished", ylab ="count")
+custom_bar(var=housedf$is_furnished, xlab= "is_furnished", ylab ="count")
+```
+
+From the data, we have the following observations:
+
+1.  The dataframe has 904 observations and 12 variables whose names
+    match the metadata.
+2.  The 'id' column is the index and is unique.
+3.  The 'price' column ranges from 1000 to 50000, with a mean of 144084
+    and a median of 125000.
+4.  The 'mq' column ranges from 0 to 840, with a mean of 115.78 and a
+    median of 100.
+5.  The 'floor' column has 7 unique values, with 1 and 6 occurring most
+    and least frequently.
+6.  The 'n_rooms' column has 5 unique values, with 3 and -1 occurring
+    most and least frequently.
+7.  The 'n_bathrooms' column has 3 unique values, with 3 and 1 occurring
+    most and least frequently.
+8.  The 'has_terrace', 'has_alarm', 'has_air_conditioning',
+    'has_parking', and 'is_furnished' columns each have 2 unique
+    values - 0 and 1.
+9.  The 'heating' column has 3 unique values - "autonomous", "other",
+    and "autonamous
+10. There are no NAs in the data.
+
+## 1.3 Data cleaning
+
+The following data quality issues were identified in the above step:
+
+1.  Using the *str*() and *unique*() method, we see the inconsistency
+    that *floor*, *n_rooms*, *n_bathrooms*, *has_terrace*, *has_alarm*,
+    *has_air_conditioning*, *has_parking*, and *is_furnished* columns
+    are implemented as integers, which does not clearly indicate their
+    categorical nature.
+2.  The *confront*() method reveals data quality issues, such as a
+    minimum value of 0 for *mq*, a minimum value of -1 for *n_rooms*,
+    and multiple factors in the *heating* variable.
+3.  The boxplots of the *price* and *mq* variables show that both have
+    outliers that could cause problems during model fitting.
+4.  The numerical summary of the *mq* variable shows a minimum value of
+    0, which is not possible for the area of a house.
+5.  The numerical summary of the *n_rooms* variable shows a minimum
+    value of -1, with a frequency of 1 and frequency distribution of
+    0.11%. It is impossible for a house to have negative rooms.
+6.  The frequency table and pie chart for *heating* show a third factor
+    'autonamous' with a frequency of 1 and a frequency distribution of
+    0.11%.
+7.  As per metadata, *heating* should take values from either of
+    "autonomous" or "other", and thus should be implemented as a factor
+    rather than character.
+
+To clean the data, we'll copy the existing data into a new dataframe
+*housedf_clean* and follow the listed steps in sequence:
+
+1.  We'll view the row where *mq* has an extreme value of 0 and gather
+    similar rows. Next a correlation test between mq and price for these
+    rows would reveal if the *p-value* \> 0.05, implying no correlation.
+    In such case, we'll remove the single observation to avoid skewing
+    the data.
+2.  Next, we'll impute the *n_rooms* = -1 with the mode of *n_rooms*, as
+    it is a single observation and it is better to merge it with
+    existing category to avoid data being skewed.
+3.  We'll correct the "autonamous" to "autonomous" in the *heating*
+    column, as it seems like a typing error and closely matches the
+    "autonomous" factor in the column.
+4.  After this correction, we'll implement *floor*, *n_rooms*,
+    *n_bathrooms*, *has_terrace*, *has_alarm*, *has_air_conditioning*,
+    *has_parking*, *is_furnished* and *heating* as categorical variables
+    by converting them to factors
+
+```{r}
+# Data Cleaning
+
+# Create new dataframe
+housedf_clean <- housedf
+
+# Viewing / correcting mq
+housedf_clean[housedf_clean$mq==0,]
+similar_set <- housedf[housedf$floor==1 & housedf$n_rooms==3 & housedf$n_bathrooms==2 & housedf$has_terrace==0 &
+                         housedf$has_alarm==0 & housedf$heating=="autonomous" & housedf$has_air_conditioning==0 &
+                         housedf$has_parking==0 & housedf$is_furnished==0,]
+cor.test(similar_set$price, similar_set$mq)
+# In case of high correlation, we impute by the mean of mq from similar_set
+#housedf_clean$mq[housedf_clean$mq==0] <- round(mean(similar_set$mq))
+# In case of low / no correlation, we remove the observation having mq as 0
+housedf_clean <- housedf_clean[which(housedf_clean$mq != 0),]
+
+# Correcting n_rooms
+# replace n_rooms == -1 with mode of n_rooms
+housedf_clean$n_rooms[which(housedf$n_rooms == -1)] <- mlv(housedf_clean$n_rooms, method = "mfv") 
+
+# Correcting heating
+housedf_clean$heating[housedf_clean$heating=='autonamous'] <- 'autonomous'
+
+# Alternate corrections
+# replace mq < 5, with mean of mq
+#housedf_clean$mq[which(housedf_clean$mq <5)] <- mean(housedf_clean$mq)
+# Replace n_rooms = -1 with positive value
+#housedf_clean$n_rooms <- abs(housedf_clean$n_rooms)
+
+
+# Converting the categorical columns into factors
+categorical_vars <- c("floor", "n_rooms", "n_bathrooms", "has_terrace","has_alarm","heating","has_air_conditioning", "has_parking", "is_furnished")
+for(var in categorical_vars){
+  housedf_clean[,var] <- as.factor(housedf_clean[,var])
+}
+
+# Checking data types and summary for housedf_clean
+summary(housedf_clean)
+```
+
+# 2. Exploratory Data Analysis (EDA)
+
+## 2.1 EDA plan
+
+To perform exploratory data analysis on our data, we will follow the
+following steps:
+
+1.  We'll individually analyse each variable using a custom
+    *mysummary()* method, which generates numerical summary for each
+    variable, alongside skewness check and histogram for numerical
+    variables, and bar graph for categorical variables.
+2.  Next, we'll check the correlation between the numerical variables
+    *price* and *mq* using *cor.test()* and *scatter plots*.
+3.  To check the difference of average mean for *price* and *mq*
+    according to different categories of the categorical variables,
+    we'll calculate the aggregate mean and test the significant
+    difference using ANOVA. Additionally, we'll draw *boxplots* between
+    pairs of numerical and categorical variables for the same purpose.
+4.  For checking dependency between categorical variables, we'll use the
+    Chi-Square test. Since some of the floors have \<5 observations,
+    we'll use fisher's exact test.
+
+## 2.2 EDA and summary of results
+
+From the above exploratory data analysis, the following conclusions can
+be made:
+
+1.  As evident by the histogram, qqplot and skewness check, the
+    distributions for *price* and *mq* are not normally distributed. In
+    fact, as both the skewness values are positive (1.23 and 4.54
+    respectively), the distributions are right skewed.
+2.  A significant majority of the houses are located on lower floors,
+    resulting in a right-skewed distribution of the *floor* variable.
+3.  The most common *n_rooms* is 3, with a frequency of 354, which
+    decreases on either side.
+4.  *n_bathrooms* are concentrated on the lower end with maximum 556
+    observations having n_bathrooms1. The observations' frequency
+    decreases as *n_bathrooms* increases.
+5.  The majority of houses lack certain amenities, such as terrace
+    (789), alarms (893), air conditioning (613), parking (887), and
+    furnishings (831).
+6.  789 houses have autonomous heating, while 114 have other.
+7.  There is a moderate positive correlation (0.317) between price and
+    mq variables, as shown in the cor.test output and model fit line in
+    scatter plot.
+8.  The *Chi-Square and Fisher Exact test* (for *floor*) shows there is
+    a significant dependence between certain pairs of categorical
+    variables (p-value \< 0.05):
+    -   *floor* with *heating* and *has_air_conditioning*
+
+    -   *n_rooms* with *n_bathrooms*
+
+    -   *n_bathrooms* with *has_terrace, has_alarm,* and *heating*
+
+    -   *has_terrace* with *has_air_conditioning, has_parking,
+        is_furnished* and *has_air_conditioning*
+
+    -   *has_alarm* with *has_air_conditioning*
+
+    -   *has_air_conditioning* with *has_parking* and *is_furnished*
+
+        Errors occurred during the test due to non-normal distribution
+        of the variables. We are using simulate.p.value = T for ignoring
+        those errors.
+9.  There is no significant difference or trend in *price* or *mq*
+    across groups of *floor*, *has_air_conditioning*, *has_parking* and
+    *is_furnished*. These variables may not significantly affect house
+    price or size.
+10. From aggregate mean and boxplots, we see that as the number of rooms
+    and bathrooms increases, the average mq and price also tend to
+    increase.
+11. Houses with terrace or alarm are significantly more expensive (shown
+    by ANOVA output) and slightly larger (but not significantly so)
+    compared to houses without a terrace or alarm.
+12. Houses with autonomous heating are significantly larger, despite not
+    being significantly expensive from those with other heating modes.
+
+```{r}
+# Defining a custom function mysummary() to show variable summary 
+# and visualise the data in the form of histogram and bar plot
+mysummary <- function(var, var_name){
+  print(summary(var))
+  # For numerical variables
+  if(class(var) == "numeric" || class(var) == "integer"){
+    # Histogram with density line
+    print(ggplot(housedf_clean, aes(x = var)) + 
+            geom_histogram(aes(y=..density..), color="#111111", fill="#555555") +
+            geom_density(alpha=.2, fill="#00C0F0") +
+            labs(title = paste("Distribution for", var_name), x = var_name, y = "count"))
+    # Skewness
+    print(skewness(var))
+    # QQplot 
+    qqPlot(var, distribution="norm", ylab = var_name, main = paste("Quantile Quantile Plot for",var_name), col.lines = "#006080")
+  }  
+  # For Categorical Variables
+  else{
+    freq.df <- as.data.frame(table(var))
+    # Bar Plot
+    print(ggplot(data = housedf_clean) + aes(x=var) + geom_bar(color="#111111", fill="#555555") + 
+            geom_text(data = freq.df, aes(x = var, y = Freq + max(Freq)/50, label = Freq), size=3) +
+            xlab(var_name) + ylab("Frequency") + ggtitle(paste("Distribution for", var_name)))
+  }
+}
+
+# Analysing Individual Variable
+
+# Analysing price
+mysummary(housedf_clean$price, var_name = "price")
+
+# Analysing mq
+mysummary(housedf_clean$mq, var_name = "mq")
+
+# Analysing floor
+mysummary(housedf_clean$floor, var_name = "floor")
+
+# Analysing n_rooms
+mysummary(housedf_clean$n_rooms, var_name = "n_rooms")
+
+# Analysing n_bathrooms
+mysummary(housedf_clean$n_bathrooms, var_name = "n_bathrooms")
+
+# Analysing has_terrace
+mysummary(housedf_clean$has_terrace, var_name = "has_terrace")
+
+# Analysing has_alarm
+mysummary(housedf_clean$has_alarm, var_name = "has_alarm")
+
+# Analysing heating
+mysummary(housedf_clean$heating, var_name = "heating")
+
+# Analysing has_air_conditioning
+mysummary(housedf_clean$has_air_conditioning, var_name = "has_air_conditioning")
+
+# Analysing has_parking
+mysummary(housedf_clean$has_parking, var_name = "has_parking")
+
+# Analysing is_furnished
+mysummary(housedf_clean$is_furnished, var_name = "is_furnished")
+
+
+# Checking correlation between numerical columns
+
+# Checking correlation between the price and mq
+cor.test(housedf_clean$price, housedf_clean$mq)
+
+# Scatter plots for dependency between price and mq
+ggplot(data = housedf_clean) + aes(x=price/100000, y=mq) + geom_point() + 
+  labs(title = "Distribution of mq vs price", x="Price in 100k", y="Area in Meter Square") + 
+  geom_smooth(method = "lm", color = "#006080")
+
+# Separate floor from rest of categorical variables for using fisher.test 
+# as the frequency of floor6, floor7 is 3 and 5
+remaining.categorical <- categorical_vars[!categorical_vars == "floor"]
+
+# Checking dependence among floor and remaining categorical variables using fisher.exact 
+# Perform the fisher.exact test of independence for floor and other categorical columns
+for (j in 1:length(remaining.categorical)) {
+    fisher.result <- fisher.test(table(housedf_clean$floor, housedf_clean[,remaining.categorical[j]]), simulate.p.value = T)
+    if(fisher.result$p.value<0.05){
+      cat("\n")
+      print(paste("Dependance between floor and", remaining.categorical[j], "is significant with a p-value of", round(fisher.result$p.value,4)))
+    }
+}
+
+
+# Checking dependence among remaining categorical variables using chi-sq test
+# Perform the chi-squared test of independence for each pair of columns
+for (i in 1:(length(remaining.categorical)-1)) {
+  for (j in (i+1):length(remaining.categorical)) {
+    chisq.result <- chisq.test(housedf_clean[,remaining.categorical[i]], housedf_clean[,remaining.categorical[j]], simulate.p.value = T)
+    #print(paste("Chi-Square Test between",columns[i], "and", columns[j], "gives p-value of", round(chisq.result$p.value,3)))
+    if(chisq.result$p.value<0.05){
+      cat("\n")
+      print(paste("Dependance between",remaining.categorical[i], "and", remaining.categorical[j], "is significant with a p-value of", round(chisq.result$p.value,4)))
+      }
+  }
+}
+
+# Defining a custom function compare.category() to check the following 
+# for all (numerical variable, categorical variables) pairs in the data:
+# 1) Aggregate mean for numerical variable across different categories of the categorical variable
+# 2) ANOVA testing for difference in average value of numerical variable across different categories
+# 3) Box Plot indicating the spread of numerical variable across different categories
+
+compare.category <- function(num_var, cat_var){
+
+  # Creating custom formula for categorical variable ~ numerical variable 
+  compare.formula <- as.formula(paste0(num_var," ~ ",cat_var))
+  
+  # Aggregate mean for numerical variable vs categorical variable
+  print(paste("Aggregate Mean of",num_var,"between categories of",cat_var))
+  print(aggregate(compare.formula,  data = housedf_clean, FUN="mean"))
+  cat("\n\n")
+  
+  # ANOVA test to check if there's significant difference in average of the numerical variable of different categories
+  print(paste("ANOVA Test for",num_var,"~",cat_var))
+  print(summary.lm(aov(compare.formula, data=housedf_clean)))
+  
+  # Auxiliary code for aesthetics and scaling
+  x_var <- housedf_clean[,cat_var]
+  y_var <- housedf_clean[,num_var]
+  box_col <- "#FF6080"
+  y_label <- num_var
+  if(num_var == "price"){
+    y_var <- y_var / 100000
+    y_label <- paste(num_var,"(in 100k)")
+    box_col <- "#006080"
+  }
+  
+  print(paste("Box Plot for",num_var,"vs",cat_var))
+  # Box plot for price vs categorical 
+  print(ggplot(data = housedf_clean) + aes(x = x_var, y = y_var) +
+    geom_boxplot(notch = F, color = box_col) +
+    labs(title = paste("Box Plot for",num_var,"distribution across",cat_var,"categories"), x = cat_var, y = y_label))
+}
+
+# Aggregate Mean, ANOVA Test, and Boxplot for price vs floor
+compare.category(num_var = "price", cat_var = "floor")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for mq vs floor
+compare.category(num_var = "mq", cat_var = "floor")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for price vs n_rooms
+compare.category(num_var = "price", cat_var = "n_rooms")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for mq vs n_rooms
+compare.category(num_var = "mq", cat_var = "n_rooms")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for price vs n_bathrooms
+compare.category(num_var = "price", cat_var = "n_bathrooms")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for mq vs n_bathrooms
+compare.category(num_var = "mq", cat_var = "n_bathrooms")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for price vs has_terrace
+compare.category(num_var = "price", cat_var = "has_terrace")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for mq vs n_rooms
+compare.category(num_var = "mq", cat_var = "has_terrace")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for price vs has_alarm
+compare.category(num_var = "price", cat_var = "has_alarm")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for mq vs has_alarm
+compare.category(num_var = "mq", cat_var = "has_alarm")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for price vs heating
+compare.category(num_var = "price", cat_var = "heating")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for mq vs heating
+compare.category(num_var = "mq", cat_var = "heating")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for price vs has_air_conditioning
+compare.category(num_var = "price", cat_var = "has_air_conditioning")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for mq vs has_air_conditioning
+compare.category(num_var = "mq", cat_var = "has_air_conditioning")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for price vs has_parking
+compare.category(num_var = "price", cat_var = "has_parking")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for mq vs has_parking
+compare.category(num_var = "mq", cat_var = "has_parking")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for price vs is_furnished
+compare.category(num_var = "price", cat_var = "is_furnished")
+
+# Aggregate Mean, ANOVA Test, and Boxplot for mq vs is_furnished
+compare.category(num_var = "mq", cat_var = "is_furnished")
+```
+
+## 2.3 Additional insights and issues
+
+Some insights and potential issues from the above analysis are:
+
+1.  The skewed distribution of *price* and *mq* may suggest the presence
+    of extreme or abnormal values i.e outliers that could be influencing
+    the overall trend.
+
+2.  The significant dependence between certain pairs of categorical
+    variables, as indicated by the Chi-Square test, may indicate a
+    relationship between these variables, and could potentially allow
+    for predictions to be made about one variable based on the values of
+    the other.
+
+3.  The significant effect of the number of rooms and bathrooms on both
+    the price and size of a house indicates the importance of these
+    factors in influencing the value and area of the property.
+
+4.  The significant differences in price between houses with and without
+    certain features (such as terrace or alarm) indicates that these
+    features are highly valued by buyers and could be used as selling
+    points. Meanwhile, the significant differences in area for different
+    heating groups indicate that heating may determinine property area.
+
+5.  The lack of significant differences or meaningful trends in price or
+    size across groups of *floor*, *has_parking*, *has_air_conditioning*
+    and *is_furnished* indicates that these variables are not as
+    influential on the overall price or size of a property.
+
+# 3. Modelling
+
+## 3.1 Explain your analysis plan
+
+Given the research question regarding property price, an analysis plan
+would include the following steps:
+
+1.  **Model Selection**: Since the dependent variable is numerical, and
+    the explanatory variables are a mix of categorical and numerical, we
+    will use ANCOVA or multiple linear regression model for our research
+    question.
+
+2.  **Variable Selection**: We'll start with including variables that
+    have a significant effect on the property price such as *mq*,
+    *n_bathrooms*, *has_terrace*, *has_alarm* and *heating*. An
+    alternate way that we're following in our modelling would be to
+    build a maximal model that incorporates all the variables in our
+    dataset as it allows us to determine maximum potential performance
+    for our model.
+
+3.  **Variable Augmentation**: Next, we'll add additional variables to
+    the model through transformation and interactions, as these new
+    variables would capture non-linear relationships or higher order
+    interactions that the original variables did not capture. This would
+    also help with reduce the skewness of non-normally distributed
+    variables like *mq*.
+
+4.  **Fitting the model and evaluating the performance**: We'll fit the
+    model using the selected variables and evaluate the performance
+    through metrics such as R-squared, significant columns (p-value \<
+    0.05), residuals and diagnostic plots.
+
+5.  **Updating the model**: Once we check the performance of the model,
+    we'll update the model to remove non-significant variables while
+    retaining the significant ones. We use **step**() function for this
+    as it updates the model in one go and then evaluate the performance
+    of the significant model. We'll also check multicollinearity between
+    variables using *vif*() method (For more information on calculating
+    variable inflation factor, see the following resource: [@vif]).
+
+6.  **Interpreting model coefficients**: Finally, we'll analyse the
+    coefficients to understand the impact of each variable on the
+    property price.
+
+## 3.2 Build a model for property price
+
+```{r}
+# Building Maximal Model
+price.max.model <- lm(formula = price ~ ., data = housedf_clean)
+
+# Summary of the model
+summary(price.max.model)
+
+# Updating the model using transformation of mq variable
+price.max.model <- update(price.max.model, . ~ . + log(mq))
+
+# Summary of the updated model
+summary(price.max.model)
+
+# Updating the model using step() method
+price.model <- step(price.max.model)
+
+# Summary of the model
+summary(price.model)
+
+# Diagnostic plots for the final model
+plot(price.model)
+
+# Checking multi-collinearity in the model parameters
+# No multi-collinearity as the value of VIF in the output is almost equal to 1
+vif(price.model)
+
+```
+
+The linear regression equation from our significant model is
+
+$price = 197.58 * mq + 22546.44 * n_rooms3 + 14134.88 * n_rooms4 + 12803.13 * n_rooms5 + 43308.89 * n_bathrooms2 + 95665.78 * n_bathrooms3 + 21427.56 * has_terrace1 + 63979.13 * has_alarm1 + 16574.03 * heatingother + 16903.30 * log(mq) + 3807.50$
+
+## 3.3 Critique model using relevant diagnostics
+
+The above is a linear regression model to predict the price of the
+property based on factors listed in the coefficients. We are using step
+function to remove insignificant dependent variables from our model. On
+the basis of the final model summary, the following observations can be
+made:
+
+1.  In our final model, the independent variables influencing price in a
+    significant way are *mq, n_rooms, n_bathrooms, has_terrace,
+    has_alarm & heating*. This is indicated by the p-value of the
+    corresponding coefficients being less than 0.05. The variable
+    *log(mq)* has a p-value of 0.1276 \> 0.05, implying the relationship
+    between log(mq) and price is not statistically significant at 0.05
+    level. However, this doesn't rule out any affect of the variable on
+    the response variable price.
+
+2.  The R-squared value that represents the goodness of fit is 0.2086,
+    which means the model explains about 21% of the variance in the
+    response variable, price.
+
+3.  The residuals which represent the difference between the observed
+    values for price and the predicted values from the model, have a
+    large overall range (from -190684 to 383769) suggesting that the
+    model is not fitting the data accurately.
+
+4.  The overall p-value for the model is \< 2.2e-16, indicating the
+    model is statistically significant.
+
+5.  The *Residual vs Fitted plot* and the upward slope in
+    *Scale-Location plot* indicate heteroscedasticity i.e. the variance
+    of the residuals is not constant. The distribution of residuals is
+    relatively concentrated around the lower fitted values, and gets
+    increasingly spread out till around 200000, after which the
+    distribution of observations decreases.
+
+6.  The banana-shaped curve on the *normal Q-Q plot* indicates the
+    residuals are not normally distributed and the distribution is
+    skewed.
+
+7.  The *Residuals vs Leverage* plot shows some outliers but no highly
+    influential case beyond the cook's distance.
+
+8.  There is no evidence of high multicollinearity between the
+    independent variables as the value of Variance Inflation Factor
+    (VIF) for each variable nears 1.
+
+Potential weaknesses of the model include
+
+1.  The relatively low R-squared value at 0.2086, indicating the model
+    explains only 21% of the variance in price, which may not be enough
+    to make accurate predictions. This could also be an indication of
+    other factors influencing the price of the property that were not
+    originally mentioned in the provided data.
+
+2.  The residuals have a large range, suggesting that the model is not
+    accurately fitting the data. This may be caused by outliers,
+    nonlinear relationships, or other factors that the model is unable
+    to capture.
+
+3.  The presence of heteroscedasticity and influential outliers could
+    cause problems with the model fit and may lead to biased /
+    inaccurate parameter estimates.
+
+4.  As indicated by the banana-curve on the QQ plot, the residuals have
+    a skewed distribution i.e the errors are not normally distributed.
+    This could cause problems for models requiring normally distributed
+    errors.
+
+5.  Based on the above mentioned weaknesses, it appears that the linear
+    regression model may not be a good choice for modeling the data,
+    despite being a statistically significant model for predicting the
+    price of the property.
+
+## 3.4 Suggest improvements to your model
+
+Based on the above weakness, the following improvements are recommended:
+
+1.  To improve the model's fit and increase the R-squared value, we
+    could consider adding more variables to the model, through
+    transformation or interactions. This would help capture additional
+    relationships in the data and increase the model's explanatory
+    power.
+
+2.  To address the issue of residuals having a large range, it may be
+    necessary to perform further data cleaning to remove outliers and
+    unusual values (such as *mq* being 1), and merging categories with
+    lower frequency, for e.g. merging the observation with *floors* 4,5,
+    and 6 into a single category.
+
+3.  To address the concerns regarding the skewed distribution for
+    dependent variable *price* and independent variables such as *mq*,
+    we could try further transforming them.
+
+4.  To address influential outliers and heteroscedasticity, we could try
+    removing those outliers and use models that are less susceptible to
+    outliers and non-constant variances.
+
+5.  Since the model fit of the linear regression model is low, the use
+    of non-linear model such as polynomial regression etc. could
+    potentially improve model fit and accuracy.
+
+# 4. Extension work
+
+## 4.1 Model the likelihood of a property being furnished (using the is_furnished variable provided).
+
+An analysis plan for modelling the likelihood of property being
+furnished is:
+
+1.  **Model Selection**: Since the dependent variable is binary, and the
+    explanatory variables are a mix of categorical and numerical, we
+    will use logistic regression.
+
+2.  **Building Maximal Model**: We'll build a maximal model by including
+    all the variables in our model as it allows us to determine the
+    model's maximum potential performance.
+
+3.  **Evaluating Model significance**: Once we fit the model, we check
+    for the presence of non-significant variables (p-value \< 0.05) in
+    our model. If no non-significant variables are present, our model is
+    significant.
+
+4.  **Model Updation**: Next, we'll update the model to remove
+    non-significant variables while retaining the significant ones. We
+    use **step**() function for this as it updates the model in one go
+    and then evaluate the performance of the significant model.
+
+5.  **Performance Evaluation**: From the model, we'll calculate the
+    chi-squared statistic and the predictor degree of freedom, which
+    will give us the p-value, from which we can check if the model has a
+    good fit or not (refer [@GLM]). Next, we'll predict the likelihood
+    of property being furnished, and generate the confusion matrix
+    (refer [@ConfMatrix]) then evaluate model performance through
+    metrics of accuracy, precision and recall.
+
+6.  **Interpreting model coefficients**: Finally, we'll analyse the odds
+    ratio to understand the effect of a unit change in the dependent
+    variable on the odds of property being furnished.
+
+In the final model below, the following observations are made:
+
+1.  The model has a relatively high residual deviance and a p-value of
+    0.99 (\>0.05) generated from the chi-square statistic, indicating
+    model is not good fit to the data.
+
+2.  The model has a very high accuracy of 92%, and the precision and
+    recall are NaN (0/0) and 0 respectively.
+
+3.  The variable influencing is_furnished significantly is
+    *has_air_conditioning=1* (p-value \< 0.05), while *heating=other*
+    and *has_terrace*=1 have p-value\>0.05.
+
+4.  From the odds ratio, we observe *has_terrace*=1 and
+    *has_air_conditioning*=1 increase the likelihood of property being
+    furnished by factors of 1.66 and 2.77 respectively, while
+    *heating=other* decreases the likelihood by a factor of 0.36.
+
+The issues in the model are:
+
+1.  The model does not fit the data very well as evident from the high
+    residual deviance and chi-sq p-value. This indicates that the
+    variables included in the model lack explanatory power in predicting
+    *is_furnished*.
+
+2.  The precision and recall values indicate the model is not able to
+    accurately classify the positive cases.
+
+3.  The p-value for the variables "heating=other" and "has_terrace=1" is
+    greater than 0.05, indicating that they may not have a strong effect
+    on *is_furnished*.
+
+```{r}
+# Model building
+furnished.max.model <- glm(formula = is_furnished ~ ., data = housedf_clean, family = "binomial")
+
+# Summary of the model
+summary(furnished.max.model)
+
+# Updating model using step() to remove non-significant terms
+furnished.model <- step(furnished.max.model)
+
+# Summary of the updated model
+summary(furnished.model)
+#plot(furnished.model)
+
+# Predict the probability of property being furnished
+housedf_clean$pfurnished <- predict(furnished.model, type = "response")
+
+# Analysing pfurnished values
+summary(housedf_clean$pfurnished)
+
+# Calculating Chi-Square statistic for furnished model
+chisq.furnished <- furnished.model$null.deviance - furnished.model$deviance 
+chisq.furnished
+
+# Calculating predictor values degree of freedom
+df.furnished <- furnished.model$df.null - furnished.model$df.residual
+df.furnished
+
+# Calculating p-value from chi-square statistics
+pchisq(chisq.furnished, df = df.furnished)
+
+# Transforming pfurnished to binary factors (1 if pfurnished > 0.5, 0 otherwise)
+predictions_factor <- as.factor(ifelse(housedf_clean$pfurnished > 0.5, 1, 0))
+
+# Call the confusionMatrix() function to generate the confusion matrix
+confusion_matrix <- confusionMatrix(data = predictions_factor, reference = housedf_clean$is_furnished, positive = "1")
+
+# Display the confusion matrix
+confusion_matrix
+
+# Odd ratios
+exp(coef(furnished.model))
+
+```
+
+# References
+
+[\@r-charts] r-charts (2020). "Pie Chart Labels Outside with ggplot2."
+Retrieved from
+<https://r-charts.com/part-whole/pie-chart-labels-outside-ggplot2/>
+
+[\@vif] VIF (2020). "vif: Variance Inflation Factors." Retrieved from
+<https://www.rdocumentation.org/packages/VIF/versions/1.0/topics/vif>
+
+[\@GLM] Statology (2020). Interpret GLM Output in R. Retrieved from
+[**https://www.statology.org/interpret-glm-output-in-r/**](https://www.statology.org/interpret-glm-output-in-r/).
+
+[\@ConfMatrix] R Development Core Team (2020). caret: Classification and
+Regression Training. Retrieved from
+[**https://CRAN.R-project.org/package=caret**](https://CRAN.R-project.org/package=caret)
